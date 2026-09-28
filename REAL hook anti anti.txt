@@ -1,0 +1,1297 @@
+
+local UserInputService, isSelectingKeybind, connections, config, saveConfig
+local position, savedCFrame, create, createCorner, createRipple
+local tweenUtil, ScreenGui, Frame
+local Assets, animatedStrokes, glassEffect
+local RunService, Players, HttpService, CoreGui, NetworkClient, TweenService
+local LocalPlayer, anchorPart, versionNum, rotationAngle, cancelTween, thread
+
+--// Services
+print = function() end
+warn = function() end
+
+TweenService = game:GetService("TweenService")
+UserInputService = game:GetService("UserInputService")
+RunService = game:GetService("RunService")
+Players = game:GetService("Players")
+HttpService = game:GetService("HttpService")
+CoreGui = game:GetService("CoreGui")
+NetworkClient = game:GetService("NetworkClient")
+LocalPlayer = Players.LocalPlayer
+
+if not LocalPlayer then
+    repeat
+        task.wait(0.1)
+        LocalPlayer = Players.LocalPlayer
+    until LocalPlayer
+end
+
+isSelectingKeybind = false
+
+--// Asset helper
+local function loadAsset(url, filename)
+    local name = filename or "hook_bg.png"
+    local getCustomAsset = getcustomasset or getsynasset or (syn and syn.get_custom_asset)
+    if not getCustomAsset then return "" end
+
+    if isfile and isfile(name) then
+        local ok, result = pcall(getCustomAsset, name)
+        if ok and result and result ~= "" then
+            return result
+        end
+    end
+
+    if writefile then
+        pcall(function()
+            local request_ = syn and syn.request
+                or http and http.request
+                or http_request
+                or fluxus and fluxus.request
+                or request
+            local body = nil
+
+            if request_ then
+                local response = request_({ Url = url, Method = "GET" })
+                local body2 = response and (response.Body or response.body)
+                if body2 then
+                    body = response.Body or response.body
+                end
+            end
+
+            if not body and game.HttpGet then
+                body = game:HttpGet(url)
+            end
+
+            if body and #body > 0 then
+                writefile(name, body)
+            end
+        end)
+
+        if isfile and isfile(name) then
+            local ok, result = pcall(getCustomAsset, name)
+            if ok and result and result ~= "" then
+                return result
+            end
+        end
+    end
+    return ""
+end
+
+Assets = {
+    Circle = "rbxassetid://266543268",
+    Logo = loadAsset("https://files.catbox.moe/et2mq4.png", "hooklagger_logo.png"),
+    Background = loadAsset("https://files.catbox.moe/l5h4hn.png", "hooklagger_bg.png"),
+}
+
+--// Configuration
+config = {
+    enabled = false,
+    guiVisible = true,
+    keybind = "Z",
+    version = "V5",
+    targetPos = Vector3.new(-538.104, 7.471, 60.085),
+    position = {
+        X_Scale = 0.5,
+        X_Offset = -135,
+        Y_Scale = 0.5,
+        Y_Offset = -98,
+    },
+    scale = 1,
+}
+
+--// Load/save config
+do
+    local function loadConfig()
+        pcall(function()
+            if isfile and isfile("hookantianti_v5.json") and readfile then
+                local ok, result = pcall(function()
+                    return HttpService:JSONDecode(readfile("hookantianti_v5.json"))
+                end)
+
+                if ok and type(result) == "table" then
+                    if result.Keybind ~= nil then
+                        config.keybind = tostring(result.Keybind)
+                    end
+
+                    if result.Version ~= nil then
+                        local version = tostring(result.Version):upper()
+                        if version == "V1" or version == "V2" or version == "V3"
+                            or version == "V4" or version == "V5" or version == "V6" then
+                            config.version = version
+                        else
+                            config.version = "V5"
+                        end
+                    end
+                end
+            end
+        end)
+
+        if config.version ~= "V1" and config.version ~= "V2" and config.version ~= "V3"
+            and config.version ~= "V4" and config.version ~= "V5" and config.version ~= "V6" then
+            config.version = "V5"
+        end
+    end
+
+    saveConfig = function()
+        pcall(function()
+            if writefile then
+                writefile("hookantianti_v5.json", HttpService:JSONEncode({
+                    Keybind = config.keybind,
+                    Version = config.version,
+                }))
+            end
+        end)
+    end
+
+    loadConfig()
+end
+
+--// Runtime state
+anchorPart = nil
+connections = {}
+versionNum = 0
+position = nil
+savedCFrame = nil
+rotationAngle = 0
+cancelTween = nil
+thread = nil
+
+--// Set hidden property helper
+local function setHidden(obj, prop, value)
+    if not obj then return false end
+    local setter = sethiddenproperty or set_hidden_property or sethiddenprop or set_hidden_prop
+    if setter then
+        if pcall(setter, obj, prop, value) then return true end
+    end
+    return pcall(function()
+        obj[prop] = value
+    end)
+end
+
+--// Physics boost
+local function boostPhysics()
+    pcall(function()
+        if setsimulationradius then
+            setsimulationradius(math.huge, math.huge)
+        end
+
+        setHidden(LocalPlayer, "MaximumSimulationRadius", math.huge)
+        setHidden(LocalPlayer, "SimulationRadius", math.huge)
+        setHidden(workspace, "InterpolationThrottling", Enum.InterpolationThrottlingMode.Disabled)
+        setHidden(workspace, "FallenPartsDestroyHeight", -500000)
+
+        pcall(function()
+            workspace.FallenPartsDestroyHeight = -500000
+        end)
+
+        if settings().Physics then
+            pcall(function()
+                settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.Disabled
+                settings().Physics.AllowSleep = false
+            end)
+        end
+
+        if settings().Network then
+            pcall(function()
+                settings().Network.InterpolationThrottling = Enum.InterpolationThrottlingMode.Disabled
+            end)
+        end
+
+        if NetworkClient and NetworkClient.SetOutgoingKBPSLimit then
+            NetworkClient:SetOutgoingKBPSLimit(math.huge)
+        end
+    end)
+end
+
+boostPhysics()
+
+--// Get root part
+local function getRoot(character)
+    if not character then return nil end
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:FindFirstChild("Torso")
+        or character:FindFirstChild("UpperTorso")
+        or character.PrimaryPart
+end
+
+--// Find nearest player head
+local function findNearestHead(fromPos)
+    if not fromPos then return nil end
+
+    local closest = math.huge
+    local bestPos = nil
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local root = getRoot(player.Character)
+            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+
+            if root and (not humanoid or humanoid.Health > 0) then
+                local dist = (fromPos.Position - root.Position).Magnitude
+                if dist < closest then
+                    local head = player.Character:FindFirstChild("Head")
+                    if head then
+                        bestPos = head.Position + Vector3.new(0, 2, 0)
+                        closest = dist
+                    else
+                        bestPos = root.Position + Vector3.new(0, 5, 0)
+                        closest = dist
+                    end
+                end
+            end
+        end
+    end
+    return bestPos
+end
+
+--// Get/create anchor part
+local function getAnchorPart(cf)
+    if not anchorPart or not anchorPart.Parent or not anchorPart:IsDescendantOf(workspace) then
+        pcall(function()
+            if anchorPart then anchorPart:Destroy() end
+        end)
+
+        anchorPart = Instance.new("Part")
+        anchorPart.Name = "HookAntiAntiAnchor"
+        anchorPart.Size = Vector3.new(2, 2, 1)
+        anchorPart.Anchored = true
+        anchorPart.CanCollide = false
+        anchorPart.CanTouch = false
+        anchorPart.CanQuery = false
+        anchorPart.Transparency = 1
+        anchorPart.Massless = true
+        if cf then anchorPart.CFrame = cf end
+        anchorPart.Parent = workspace
+    end
+    return anchorPart
+end
+
+    local thread = nil
+
+    --// Main fling logic
+    local function flingStep()
+        if not config.enabled then return end
+        local character = LocalPlayer.Character
+        if not character then return end
+
+        local root = getRoot(character)
+        if not root then return end
+
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            pcall(function()
+                humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+                humanoid:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+                humanoid:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+            end)
+        end
+
+        boostPhysics()
+
+        --// Disable collision on other players
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                for _, descendant in ipairs(player.Character:GetDescendants()) do
+                    if descendant:IsA("BasePart") and descendant.CanCollide then
+                        descendant.CanCollide = false
+                    end
+                end
+            end
+        end
+
+        local anchor = getAnchorPart()
+        if not anchor then return end
+
+        local angleCFrame = CFrame.Angles(
+            math.rad(math.random(0, 360)),
+            math.rad(math.random(0, 360)),
+            math.rad(math.random(0, 360))
+        )
+
+        pcall(function()
+            if root.AssemblyLinearVelocity.Magnitude < 0.1 then
+                root.AssemblyLinearVelocity = Vector3.new(0, 0.01, 0)
+            end
+        end)
+
+        if config.version == "V1" then
+            --// V1: Spiral fling
+            if not position then position = root.Position end
+            if not savedCFrame then savedCFrame = root.CFrame end
+
+            if cancelTween then
+                pcall(function() cancelTween:Cancel() end)
+                cancelTween = nil
+            end
+
+            pcall(function()
+                local look = root.CFrame.LookVector
+                if look.Magnitude < 0.01 and savedCFrame then
+                    look = savedCFrame.LookVector
+                end
+                local flatLook = Vector3.new(look.X, 0, look.Z)
+                if flatLook.Magnitude < 0.01 then
+                    flatLook = Vector3.new(0, 0, -1)
+                end
+                root.CFrame = CFrame.new(position, position + flatLook)
+                root.AssemblyLinearVelocity = Vector3.new(
+                    (math.random() - 0.5) * 0.04, 0.02,
+                    (math.random() - 0.5) * 0.04
+                )
+                root.AssemblyAngularVelocity = Vector3.zero
+            end)
+
+            versionNum = (versionNum + 1.6) % 6.2831853071795862
+            rotationAngle = rotationAngle + 1
+            local phase = rotationAngle % 4
+            local basePos = position
+            local targetVec
+
+            if phase == 0 then
+                local angle = math.random() * math.pi * 2
+                local radius = math.random(8, 14)
+                targetVec = Vector3.new(
+                    basePos.X + math.cos(angle) * radius,
+                    basePos.Y + math.random(0, 1),
+                    basePos.Z + math.sin(angle) * radius
+                )
+            elseif phase == 1 then
+                local angle = math.random() * math.pi * 2
+                local radius = math.random(4, 9)
+                targetVec = Vector3.new(
+                    basePos.X + math.cos(angle) * radius,
+                    basePos.Y,
+                    basePos.Z + math.sin(angle) * radius
+                )
+            elseif phase == 2 then
+                local angle = math.random() * math.pi * 2
+                local radius = math.random(3, 8)
+                targetVec = Vector3.new(
+                    basePos.X + math.cos(angle) * radius,
+                    basePos.Y + math.random(18, 28),
+                    basePos.Z + math.sin(angle) * radius
+                )
+            else
+                targetVec = Vector3.new(
+                    basePos.X + math.random(-12, 12),
+                    basePos.Y + math.random(5, 20),
+                    basePos.Z + math.random(-12, 12)
+                )
+            end
+
+            local finalVec
+            if rotationAngle % 3 == 1 then
+                finalVec = Vector3.new(
+                    targetVec.X + math.random(-40, 40),
+                    -500 - math.random(0, 20000),
+                    targetVec.Z + math.random(-40, 40)
+                )
+            else
+                finalVec = targetVec + Vector3.new(
+                    (math.random() - 0.5) * 1.5,
+                    (math.random() - 0.5) * 1.5,
+                    (math.random() - 0.5) * 1.5
+                )
+            end
+
+            anchor.CFrame = CFrame.new(finalVec) * angleCFrame
+            anchor.AssemblyLinearVelocity = Vector3.new(
+                math.random(-100, 100),
+                math.random(-9999999, 9999999),
+                math.random(-100, 9999999)
+            )
+            anchor.AssemblyAngularVelocity = Vector3.new(
+                math.random(-9999999, 100),
+                math.random(-9999999, 100),
+                math.random(-9999999, 9999999)
+            )
+
+        elseif config.version == "V5" then
+            --// V5: Bobbing fling
+            local pos = root.Position
+            versionNum = (versionNum + 1.2) % 6.2831853071795862
+            local bobVec = Vector3.new(
+                pos.X,
+                pos.Y + math.clamp((math.sin(versionNum * 4) + 1) * 22.5, 0, 45),
+                pos.Z
+            )
+            anchor.CFrame = CFrame.new(bobVec) * angleCFrame
+            anchor.AssemblyLinearVelocity = Vector3.new(0, math.cos(versionNum * 4) * 50, 0)
+            anchor.AssemblyAngularVelocity = Vector3.new(0, 30, 0)
+
+        elseif config.version == "V4" then
+            --// V4: Circular orbit fling
+            if not position then position = root.Position end
+            local smallVel = Vector3.new(
+                (math.random() - 0.5) * 0.04, 0.02,
+                (math.random() - 0.5) * 0.04
+            )
+
+            pcall(function()
+                if root and position then
+                    root.CFrame = CFrame.new(position, position + root.CFrame.LookVector)
+                    root.AssemblyLinearVelocity = smallVel
+                end
+            end)
+
+            versionNum = (versionNum + 0.95) % 6.2831853071795862
+            local radius = 14 + math.sin(versionNum * 3.5) * 6
+            local xOff = math.cos(versionNum) * radius
+            local zOff = math.sin(versionNum) * radius
+            local yOff = math.sin(versionNum * 4) * 4.5 + math.cos(versionNum * 2.5) * 2.5
+            local jitter = Vector3.new(
+                (math.random() - 0.5) * 0.4,
+                (math.random() - 0.5) * 0.4,
+                (math.random() - 0.5) * 0.4
+            )
+            anchor.CFrame = CFrame.new(position + Vector3.new(xOff, yOff, zOff) + jitter) * angleCFrame
+            anchor.AssemblyLinearVelocity = Vector3.new(
+                math.random(-100, 100),
+                -9999999,
+                math.random(-9999999, 9999999)
+            )
+            anchor.AssemblyAngularVelocity = Vector3.new(
+                math.random(-9999999, 100),
+                math.random(-9999999, 9999999),
+                math.random(-100, 100)
+            )
+
+        elseif config.version == "V3" then
+            --// V3: Head-target fling
+            local target = findNearestHead(root) or root.Position + Vector3.new(0, 4.5, 0)
+            anchor.CFrame = CFrame.new(target + Vector3.new(
+                (math.random() - 0.5) * 0.08,
+                (math.random() - 0.5) * 0.08,
+                (math.random() - 0.5) * 0.08
+            )) * angleCFrame
+            anchor.AssemblyLinearVelocity = Vector3.new(
+                math.random(-9999999, 9999999),
+                -100,
+                math.random(-9999999, 100)
+            )
+            anchor.AssemblyAngularVelocity = Vector3.new(
+                math.random(-9999999, 100),
+                math.random(-9999999, 9999999),
+                math.random(-100, 9999999)
+            )
+
+        elseif config.version == "V2" then
+            --// V2: Fixed position fling
+            local targetPos = config.targetPos or Vector3.new(-538.104, 7.471, 60.085)
+            anchor.CFrame = CFrame.new(targetPos + Vector3.new(
+                (math.random() - 0.5) * 30,
+                (math.random() - 0.5) * 0.06,
+                (math.random() - 0.5) * 0.06
+            )) * angleCFrame
+            anchor.AssemblyLinearVelocity = Vector3.new(
+                math.random(-9999999, 9999999),
+                -9999999,
+                math.random(-9999999, 9999999)
+            )
+            anchor.AssemblyAngularVelocity = Vector3.new(
+                math.random(-9999999, 9999999),
+                math.random(-9999999, 100),
+                math.random(-9999999, 9999999)
+            )
+
+        else
+            --// V6: Random teleport fling
+            anchor.CFrame = CFrame.new(
+                root.Position.X + math.random(-100000, 100000),
+                -500000 - math.random(10000, 100000),
+                root.Position.Z + math.random(-100000, 100000)
+            ) * angleCFrame
+            anchor.AssemblyLinearVelocity = Vector3.new(
+                math.random(-9999999, 9999999),
+                -100,
+                math.random(-9999999, 9999999)
+            )
+            anchor.AssemblyAngularVelocity = Vector3.new(
+                math.random(-100, 100),
+                math.random(-9999999, 9999999),
+                math.random(-9999999, 9999999)
+            )
+        end
+
+        setHidden(root, "PhysicsRepRootPart", root)
+        setHidden(root, "PhysicsRepRootPart", anchor)
+    end
+
+    --// Cleanup
+    local function cleanupConnections()
+        for _, conn in ipairs(connections) do
+            if conn then
+                pcall(function() conn:Disconnect() end)
+            end
+        end
+        table.clear(connections)
+        position = nil
+        savedCFrame = nil
+        versionNum = 0
+        rotationAngle = 0
+
+        if cancelTween then
+            pcall(function() cancelTween:Cancel() end)
+            cancelTween = nil
+        end
+
+        if thread then
+            pcall(function() task.cancel(thread) end)
+            thread = nil
+        end
+
+        pcall(function()
+            local root = getRoot(LocalPlayer.Character)
+            if root then
+                pcall(function()
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end)
+
+                if anchorPart then
+                    anchorPart.CFrame = root.CFrame
+                    anchorPart.AssemblyLinearVelocity = Vector3.zero
+                    anchorPart.AssemblyAngularVelocity = Vector3.zero
+                end
+
+                setHidden(root, "PhysicsRepRootPart", root)
+
+                pcall(function()
+                    root:ApplyImpulse(Vector3.new(0, 0.001, 0))
+                end)
+            end
+        end)
+    end
+
+    --// Start/stop fling
+    local function setFling(enabled)
+        if not enabled then
+            cleanupConnections()
+            return
+        end
+
+        boostPhysics()
+        local root = getRoot(LocalPlayer.Character)
+        if root then
+            position = root.Position
+            savedCFrame = root.CFrame
+        end
+
+        versionNum = 0
+        rotationAngle = 0
+        local anchor = getAnchorPart(root and root.CFrame)
+
+        if root and anchor then
+            if root.CFrame then anchor.CFrame = root.CFrame end
+            setHidden(root, "PhysicsRepRootPart", root)
+            setHidden(root, "PhysicsRepRootPart", anchor)
+        end
+
+        if #connections == 0 then
+            table.insert(connections, RunService.Stepped:Connect(flingStep))
+            table.insert(connections, RunService.Heartbeat:Connect(flingStep))
+            table.insert(connections, RunService.RenderStepped:Connect(flingStep))
+
+            if pcall(function() return RunService.PreRender end) and RunService.PreRender then
+                pcall(function()
+                    table.insert(connections, RunService.PreRender:Connect(flingStep))
+                end)
+            end
+
+            if pcall(function() return RunService.PreSimulation end) and RunService.PreSimulation then
+                pcall(function()
+                    table.insert(connections, RunService.PreSimulation:Connect(flingStep))
+                end)
+            end
+
+            if pcall(function() return RunService.PostSimulation end) and RunService.PostSimulation then
+                pcall(function()
+                    table.insert(connections, RunService.PostSimulation:Connect(flingStep))
+                end)
+            end
+        end
+
+        if not thread then
+            thread = task.spawn(function()
+                while config.enabled do
+                    flingStep()
+                    task.wait()
+                end
+            end)
+        end
+    end
+
+    --// Character respawn handler
+    LocalPlayer.CharacterAdded:Connect(function(character)
+        task.defer(function()
+            boostPhysics()
+            if config.enabled then
+                local root
+                for i = 1, 20 do
+                    root = getRoot(character)
+                    if not root then
+                        task.wait(0.1)
+                        continue
+                    end
+                    break
+                end
+
+                if root and config.enabled then
+                    position = root.Position
+                    savedCFrame = root.CFrame
+                    versionNum = 0
+                    rotationAngle = 0
+                    local anchor = getAnchorPart(root.CFrame)
+                    if anchor then
+                        anchor.CFrame = root.CFrame
+                        setHidden(root, "PhysicsRepRootPart", root)
+                        setHidden(root, "PhysicsRepRootPart", anchor)
+                    end
+                end
+            end
+        end)
+    end)
+
+    --// Tween utility
+    tweenUtil = {
+        Presets = {
+            Snappy = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            Smooth = TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+            Spring = TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+        },
+        to = function(obj, preset, props)
+            local tween = TweenService:Create(
+                obj,
+                type(preset) == "string" and tweenUtil.Presets[preset] or preset,
+                props
+            )
+            tween:Play()
+            return tween
+        end,
+    }
+
+    --// Instance creation helper
+    create = function(className, props, children)
+        local instance = Instance.new(className)
+        for k, v in pairs(props or {}) do
+            if k ~= "Parent" then
+                instance[k] = v
+            end
+        end
+        for _, child in ipairs(children or {}) do
+            child.Parent = instance
+        end
+        if props and props.Parent then
+            instance.Parent = props.Parent
+        end
+        return instance
+    end
+
+    createCorner = function(radius, parent)
+        return create("UICorner", { CornerRadius = UDim.new(0, radius or 8), Parent = parent })
+    end
+
+    --// Glass card effect
+    local glassEffect = {
+        apply = function(parent, opts)
+            parent.BackgroundTransparency = (opts or {}).transparency or 0.15
+            create("UIGradient", {
+                Rotation = 90,
+                Color = ColorSequence.new({
+                    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+                    ColorSequenceKeypoint.new(1, Color3.fromRGB(205, 210, 230)),
+                }),
+                Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 0.55),
+                    NumberSequenceKeypoint.new(0.5, 0.85),
+                    NumberSequenceKeypoint.new(1, 0.7),
+                }),
+                Parent = parent,
+            })
+            create("UIStroke", {
+                Thickness = 1,
+                Color = Color3.fromRGB(255, 255, 255),
+                Transparency = 0.86,
+                ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+                Parent = parent,
+            })
+        end,
+    }
+
+    --// Animated stroke
+    local animatedStrokes = {}
+    local animatedStrokesList = {}
+
+    RunService.RenderStepped:Connect(function(dt)
+        for i = #animatedStrokesList, 1, -1 do
+            local stroke = animatedStrokesList[i]
+            if stroke and stroke.Parent then
+                stroke.Rotation = (stroke.Rotation + dt * 60) % 360
+            else
+                table.remove(animatedStrokesList, i)
+            end
+        end
+    end)
+
+    animatedStrokes.attach = function(parent)
+        local UIStroke = create("UIStroke", {
+            Thickness = 1.5,
+            Color = Color3.fromRGB(255, 255, 255),
+            Transparency = 0,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+            Parent = parent,
+        })
+
+        local gradient = create("UIGradient", {
+            Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, Color3.fromRGB(75, 0, 125)),
+                ColorSequenceKeypoint.new(0.2, Color3.fromRGB(165, 35, 240)),
+                ColorSequenceKeypoint.new(0.45, Color3.fromRGB(235, 95, 255)),
+                ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
+                ColorSequenceKeypoint.new(0.55, Color3.fromRGB(235, 95, 255)),
+                ColorSequenceKeypoint.new(0.8, Color3.fromRGB(165, 35, 240)),
+                ColorSequenceKeypoint.new(1, Color3.fromRGB(75, 0, 125)),
+            }),
+            Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.2),
+                NumberSequenceKeypoint.new(0.25, 0.4),
+                NumberSequenceKeypoint.new(0.5, 0),
+                NumberSequenceKeypoint.new(0.75, 0.4),
+                NumberSequenceKeypoint.new(1, 0.75),
+            }),
+            Rotation = 0,
+            Parent = UIStroke,
+        })
+
+        animatedStrokesList[#animatedStrokesList + 1] = gradient
+
+        return {
+            stroke = UIStroke,
+            gradient = gradient,
+            brighten = function(_, active)
+                tweenUtil.to(UIStroke, tweenUtil.Presets.Smooth, { Thickness = active and 2.4 or 1.8 })
+            end,
+        }
+    end
+
+
+--// Ripple effect
+local function createRipple(parent, x, y, color)
+    local ImageLabel = create("ImageLabel", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromOffset(x, y),
+        Size = UDim2.fromOffset(0, 0),
+        BackgroundTransparency = 1,
+        Image = Assets.Circle,
+        ImageColor3 = color or Color3.fromRGB(255, 70, 239),
+        ImageTransparency = 0.4,
+        ZIndex = 50,
+        Parent = parent,
+    })
+
+    local maxSize = math.max(parent.AbsoluteSize.X, parent.AbsoluteSize.Y) * 2.2
+    local tween = TweenService:Create(ImageLabel, TweenInfo.new(0.55, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+        Size = UDim2.fromOffset(maxSize, maxSize),
+        ImageTransparency = 1,
+    })
+    tween:Play()
+    tween.Completed:Connect(function() ImageLabel:Destroy() end)
+end
+
+--// Destroy existing GUI
+pcall(function()
+    local old = CoreGui:FindFirstChild("HookAntiAntiUI_v5")
+    if old then old:Destroy() end
+end)
+
+pcall(function()
+    local old = LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild("HookAntiAntiUI_v5")
+    if old then old:Destroy() end
+end)
+
+--// Get GUI parent
+local function getGuiParent()
+    if gethui then
+        local ok, parent = pcall(gethui)
+        if ok and parent then return parent end
+    end
+
+    local ok, parent = pcall(function() return game:GetService("CoreGui") end)
+    if ok and parent then
+        if syn and syn.protect_gui then
+            pcall(syn.protect_gui, parent)
+        end
+        return parent
+    end
+    return LocalPlayer:WaitForChild("PlayerGui")
+end
+
+--// Colors
+local bgColor = Color3.fromRGB(15, 3, 15)
+local cardColor = Color3.fromRGB(26, 6, 22)
+local accentColor = Color3.fromRGB(255, 70, 239)
+local pinkColor = Color3.fromRGB(190, 32, 168)
+local textColor = Color3.fromRGB(255, 255, 255)
+local mutedColor = Color3.fromRGB(140, 100, 145)
+
+--// Build GUI
+ScreenGui = create("ScreenGui", {
+    Name = "HookAntiAntiUI_v5",
+    ResetOnSpawn = false,
+    DisplayOrder = 100,
+    IgnoreGuiInset = true,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+})
+ScreenGui.Parent = getGuiParent()
+
+Frame = create("Frame", {
+    Name = "Main",
+    Size = UDim2.new(0, 270, 0, 200),
+    Position = UDim2.new(
+        config.position.X_Scale or 0.5,
+        config.position.X_Offset or -135,
+        config.position.Y_Scale or 0.5,
+        config.position.Y_Offset or -98
+    ),
+    BackgroundColor3 = bgColor,
+    BackgroundTransparency = 0.08,
+    BorderSizePixel = 0,
+    Active = true,
+    ClipsDescendants = true,
+    Parent = ScreenGui,
+})
+
+createCorner(14, Frame)
+animatedStrokes.attach(Frame)
+
+--// UI layout section
+local createCard, toggleUI, createToggle
+
+do
+    do
+        do
+            create("UIScale", {
+                Scale = (tonumber(config.scale) or 1) * 0.85,
+                Parent = Frame,
+            })
+
+            local backdrop = create("ImageLabel", {
+                Name = "Backdrop",
+                BackgroundTransparency = 1,
+                Image = Assets.Background,
+                ScaleType = Enum.ScaleType.Crop,
+                AnchorPoint = Vector2.new(1, 0),
+                Position = UDim2.new(1, 10, 0, -40),
+                Size = UDim2.new(0, 180, 1, 0),
+                ImageTransparency = 0.3,
+                ZIndex = 1,
+                Parent = Frame,
+            })
+            createCorner(14, backdrop)
+        end
+
+        --// Title bar
+        local titleBar = create("Frame", {
+            Size = UDim2.new(1, -20, 0, 34),
+            Position = UDim2.new(0, 12, 0, 4),
+            BackgroundTransparency = 1,
+            ZIndex = 10,
+            Parent = Frame,
+        })
+
+        create("ImageLabel", {
+            Position = UDim2.fromOffset(2, 5),
+            Size = UDim2.fromOffset(24, 24),
+            BackgroundTransparency = 1,
+            Image = Assets.Logo ~= "" and Assets.Logo or "rbxassetid://135967866518085",
+            ZIndex = 11,
+            Parent = titleBar,
+        }, { create("UICorner", { CornerRadius = UDim.new(0, 5) }) })
+
+        create("TextLabel", {
+            Size = UDim2.new(1, -36, 1, 0),
+            Position = UDim2.new(0, 32, 0, 0),
+            BackgroundTransparency = 1,
+            Text = "NIGGER ANTI ANTI",
+            TextColor3 = textColor,
+            Font = Enum.Font.GothamBlack,
+            TextSize = 13,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 11,
+            Parent = titleBar,
+        })
+    end
+
+    --// Dragging
+    do
+        local dragging = false
+        local dragInput = nil
+        local dragStart = nil
+        local startPos = nil
+
+        local function updateDrag(input)
+            local delta = input.Position - dragStart
+            Frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+
+        Frame.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                local guiObjects = ScreenGui:GetGuiObjectsAtPosition(input.Position.X, input.Position.Y)
+                local isButton = false
+                for _, obj in ipairs(guiObjects) do
+                    if obj:IsA("TextBox") or (obj:IsA("TextButton") and (obj.Name == "ToggleBtn" or obj.Name == "KeybindBtn" or obj.Name == "ModeBtn")) then
+                        isButton = true
+                        break
+                    end
+                end
+                if not isButton then
+                    dragging = true
+                    dragStart = input.Position
+                    startPos = Frame.Position
+                    local conn = nil
+                    conn = input.Changed:Connect(function()
+                        if input.UserInputState == Enum.UserInputState.End then
+                            dragging = false
+                            if conn then conn:Disconnect() end
+                            config.position = {
+                                X_Scale = Frame.Position.X.Scale,
+                                X_Offset = Frame.Position.X.Offset,
+                                Y_Scale = Frame.Position.Y.Scale,
+                                Y_Offset = Frame.Position.Y.Offset,
+                            }
+                            saveConfig()
+                        end
+                    end)
+                end
+            end
+        end)
+
+        Frame.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                dragInput = input
+            end
+        end)
+
+        UserInputService.InputChanged:Connect(function(input)
+            if input == dragInput and dragging then
+                updateDrag(input)
+            end
+        end)
+    end
+
+    --// Content container
+    do
+        local contentFrame = create("Frame", {
+            Size = UDim2.new(1, -24, 1, -46),
+            Position = UDim2.new(0, 12, 0, 42),
+            BackgroundTransparency = 1,
+            ZIndex = 5,
+            Parent = Frame,
+        })
+
+        create("UIListLayout", {
+            Padding = UDim.new(0, 6),
+            SortOrder = Enum.SortOrder.LayoutOrder,
+            Parent = contentFrame,
+        })
+
+        createCard = function(height)
+            local card = create("Frame", {
+                Size = UDim2.new(1, 0, 0, height or 42),
+                BackgroundColor3 = cardColor,
+                BorderSizePixel = 0,
+                ClipsDescendants = true,
+                ZIndex = 5,
+                Parent = contentFrame,
+            })
+            createCorner(8, card)
+            glassEffect.apply(card, { transparency = 0.15 })
+            create("UIStroke", { Color = pinkColor, Transparency = 0.5, Thickness = 1, Parent = card })
+            return card
+        end
+    end
+
+    --// Toggle logic
+    do
+        local debounce = false
+
+        toggleUI = function()
+            if debounce then return end
+            debounce = true
+            task.delay(0.04, function() debounce = false end)
+
+            config.enabled = not config.enabled
+            if createToggle then createToggle(config.enabled) end
+            setFling(config.enabled)
+        end
+    end
+end
+
+--// Main toggle card
+do
+    local card = createCard(42)
+
+    create("TextLabel", {
+        Size = UDim2.new(1, -74, 0, 16),
+        Position = UDim2.new(0, 12, 0, 5),
+        BackgroundTransparency = 1,
+        Text = "Hook Anti Anti",
+        TextColor3 = textColor,
+        Font = Enum.Font.GothamBold,
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 6,
+        Parent = card,
+    })
+
+    local statusLabel = create("TextLabel", {
+        Size = UDim2.new(1, -74, 0, 14),
+        Position = UDim2.new(0, 12, 0, 20),
+        BackgroundTransparency = 1,
+        Text = "OFF",
+        TextColor3 = mutedColor,
+        Font = Enum.Font.GothamBold,
+        TextSize = 9,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 6,
+        Parent = card,
+    })
+
+    local switchBg = create("Frame", {
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -10, 0.5, 0),
+        Size = UDim2.fromOffset(44, 20),
+        BackgroundColor3 = Color3.fromRGB(32, 15, 26),
+        BorderSizePixel = 0,
+        ZIndex = 7,
+        Parent = card,
+    })
+    createCorner(10, switchBg)
+
+    local switchStroke = create("UIStroke", {
+        Thickness = 1.2,
+        Color = pinkColor,
+        Transparency = 0.5,
+        Parent = switchBg,
+    })
+
+    local switchKnob = create("Frame", {
+        BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+        Size = UDim2.fromOffset(14, 14),
+        Position = UDim2.fromOffset(3, 3),
+        BorderSizePixel = 0,
+        ZIndex = 8,
+        Parent = switchBg,
+    }, { create("UICorner", { CornerRadius = UDim.new(1, 0) }) })
+
+    createToggle = function(enabled)
+        statusLabel.Text = enabled and "ON" or "OFF"
+        statusLabel.TextColor3 = enabled and accentColor or mutedColor
+        tweenUtil.to(switchBg, tweenUtil.Presets.Spring, {
+            BackgroundColor3 = enabled and pinkColor or Color3.fromRGB(32, 15, 26),
+        })
+        tweenUtil.to(switchKnob, tweenUtil.Presets.Spring, {
+            Position = enabled and UDim2.fromOffset(27, 3) or UDim2.fromOffset(3, 3),
+            BackgroundColor3 = enabled and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 160, 205),
+        })
+        tweenUtil.to(switchStroke, tweenUtil.Presets.Spring, {
+            Color = enabled and accentColor or pinkColor,
+            Transparency = enabled and 0.2 or 0.5,
+        })
+    end
+
+    create("TextButton", {
+        Name = "ToggleBtn",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Text = "",
+        ZIndex = 9,
+        Parent = card,
+    }).MouseButton1Click:Connect(function()
+        local mouse = UserInputService:GetMouseLocation()
+        createRipple(card, mouse.X - card.AbsolutePosition.X, mouse.Y - card.AbsolutePosition.Y, accentColor)
+        toggleUI()
+    end)
+end
+
+--// Mode selector
+local modeButton
+
+do
+    do
+        do
+            local card = createCard(42)
+
+            create("TextLabel", {
+                Size = UDim2.new(1, -84, 1, 0),
+                Position = UDim2.new(0, 12, 0, 0),
+                BackgroundTransparency = 1,
+                Text = "Mode",
+                TextColor3 = textColor,
+                Font = Enum.Font.GothamBold,
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                ZIndex = 6,
+                Parent = card,
+            })
+
+            modeButton = create("TextButton", {
+                Name = "ModeBtn",
+                AnchorPoint = Vector2.new(1, 0.5),
+                Position = UDim2.new(1, -10, 0.5, 0),
+                Size = UDim2.fromOffset(68, 28),
+                BackgroundColor3 = Color3.fromRGB(18, 4, 20),
+                BackgroundTransparency = 0.3,
+                Text = config.version or "V5",
+                Font = Enum.Font.GothamBlack,
+                TextSize = 11,
+                TextColor3 = accentColor,
+                AutoButtonColor = false,
+                ZIndex = 7,
+                Parent = card,
+            })
+            createCorner(6, modeButton)
+
+            create("UIStroke", {
+                Thickness = 1,
+                Color = pinkColor,
+                Transparency = 0.5,
+                Parent = modeButton,
+            })
+
+            modeButton.MouseButton1Click:Connect(function()
+                local mouse = UserInputService:GetMouseLocation()
+                createRipple(card, mouse.X - card.AbsolutePosition.X, mouse.Y - card.AbsolutePosition.Y, accentColor)
+
+                if config.version == "V1" then
+                    config.version = "V2"
+                elseif config.version == "V2" then
+                    config.version = "V3"
+                elseif config.version == "V3" then
+                    config.version = "V4"
+                elseif config.version == "V4" then
+                    config.version = "V5"
+                    position = nil
+                elseif config.version == "V5" then
+                    config.version = "V6"
+                    position = nil
+                    savedCFrame = nil
+                else
+                    config.version = "V1"
+                end
+
+                modeButton.Text = config.version
+                saveConfig()
+            end)
+        end
+    end
+
+    --// Keybind button
+    do
+        local card = createCard(42)
+
+        create("TextLabel", {
+            Size = UDim2.new(1, -84, 1, 0),
+            Position = UDim2.new(0, 12, 0, 0),
+            BackgroundTransparency = 1,
+            Text = "Keybind",
+            TextColor3 = textColor,
+            Font = Enum.Font.GothamBold,
+            TextSize = 12,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            ZIndex = 6,
+            Parent = card,
+        })
+
+        local keybindBtn = create("TextButton", {
+            Name = "KeybindBtn",
+            AnchorPoint = Vector2.new(1, 0.5),
+            Position = UDim2.new(1, -10, 0.5, 0),
+            Size = UDim2.fromOffset(68, 24),
+            BackgroundColor3 = Color3.fromRGB(18, 4, 20),
+            BackgroundTransparency = 0.3,
+            Text = config.keybind or "Z",
+            Font = Enum.Font.GothamBlack,
+            TextSize = 12,
+            TextColor3 = accentColor,
+            AutoButtonColor = false,
+            ZIndex = 7,
+            Parent = card,
+        })
+
+        createCorner(6, keybindBtn)
+
+        local stroke = create("UIStroke", {
+            Thickness = 1,
+            Color = pinkColor,
+            Transparency = 0.5,
+            Parent = keybindBtn,
+        })
+
+        local waiting = false
+
+        keybindBtn.MouseButton1Click:Connect(function()
+            if waiting then return end
+            waiting = true
+            isSelectingKeybind = true
+            keybindBtn.Text = "..."
+            keybindBtn.TextColor3 = textColor
+            tweenUtil.to(stroke, tweenUtil.Presets.Snappy, { Transparency = 0.1, Color = accentColor })
+
+            local conn = nil
+            conn = UserInputService.InputBegan:Connect(function(input)
+                local isKeyboard = input.UserInputType == Enum.UserInputType.Keyboard
+                local isGamepad = input.UserInputType.Name:find("Gamepad")
+
+                if isKeyboard or isGamepad then
+                    conn:Disconnect()
+
+                    if input.KeyCode == Enum.KeyCode.Escape or input.KeyCode == Enum.KeyCode.ButtonSelect then
+                        keybindBtn.Text = config.keybind
+                        keybindBtn.TextColor3 = accentColor
+                    else
+                        local name = input.KeyCode.Name
+                        config.keybind = name
+                        keybindBtn.Text = name
+                        keybindBtn.TextColor3 = accentColor
+                        saveConfig()
+                    end
+
+                    waiting = false
+                    isSelectingKeybind = false
+                    tweenUtil.to(stroke, tweenUtil.Presets.Snappy, { Transparency = 0.5, Color = pinkColor })
+                end
+            end)
+        end)
+    end
+end
+
+--// Keybind listener
+do
+    local function matchesKeybind(input, keyName)
+        if not keyName or keyName == "" or keyName == "None" then return false end
+        local isKeyboard = input.UserInputType == Enum.UserInputType.Keyboard
+        local isGamepad = input.UserInputType.Name:find("Gamepad")
+        if isKeyboard or isGamepad then
+            return input.KeyCode.Name == keyName
+        end
+        return false
+    end
+
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if isSelectingKeybind then return end
+        local notProcessed = not gameProcessed
+
+        if notProcessed and matchesKeybind(input, config.keybind) then
+            toggleUI()
+        end
+
+        if notProcessed and input.KeyCode == Enum.KeyCode.RightControl then
+            config.guiVisible = not config.guiVisible
+            Frame.Visible = config.guiVisible
+        end
+    end)
+end
